@@ -632,31 +632,11 @@ namespace TextChatMod
 
             static System.Collections.IEnumerator CustomTimeoutRoutine(PlayerConnectionLog instance)
             {
-                var logText = instance.GetComponentInChildren<TextMeshProUGUI>();
-                if (logText == null)
-                {
-                    yield return new WaitForSeconds(TextChatPlugin.messageTimeout.Value);
-                    RemoveFirstMessage(instance);
-                    yield break;
-                }
+                // Wait full timeout duration
+                yield return new WaitForSeconds(TextChatPlugin.messageTimeout.Value);
 
-                yield return new WaitForSeconds(TextChatPlugin.messageTimeout.Value - 1.5f); // Delay before fade
-
-                float duration = 1.5f;
-                float elapsed = 0f;
-
-                Color startColor = logText.color;
-                Color fadedColor = new Color(startColor.r, startColor.g, startColor.b, 0f);
-
-                while (elapsed < duration)
-                {
-                    elapsed += Time.deltaTime;
-                    logText.color = Color.Lerp(startColor, fadedColor, elapsed / duration);
-                    yield return null;
-                }
-
+                // Remove first message from the log
                 RemoveFirstMessage(instance);
-                logText.color = startColor; // Reset for future messages
             }
         }
     }
