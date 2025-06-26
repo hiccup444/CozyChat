@@ -12,6 +12,7 @@ using TMPro;
 using ExitGames.Client.Photon;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
+using System.Text.RegularExpressions;
 
 namespace TextChatMod
 {
@@ -561,7 +562,9 @@ namespace TextChatMod
             string nameColorTag = (string)getColorTagMethod.Invoke(connectionLog, new object[] { userColor });
             string msgColorTag = (string)getColorTagMethod.Invoke(connectionLog, new object[] { chatMessageColor.Value });
 
-            string formatted = $"{nameColorTag}{playerName}</color>{msgColorTag}: {message}</color>";
+            string cleanMessage = Regex.Replace(message, @"<.*?>", "", RegexOptions.Singleline);
+            string formatted = $"{nameColorTag}{playerName}</color>{msgColorTag}: {cleanMessage}</color>";
+
             addMessageMethod.Invoke(connectionLog, new object[] { formatted });
         }
 
