@@ -11,6 +11,7 @@ using UnityEngine.InputSystem;
 using TMPro;
 using ExitGames.Client.Photon;
 using UnityEngine.EventSystems;
+using UnityEngine.UI;
 
 namespace TextChatMod
 {
@@ -244,21 +245,27 @@ namespace TextChatMod
                     backgroundObj = Instantiate(originalBar, chatInputUI.transform);
                     backgroundObj.name = "ChatBackground";
 
-                    // Disable health-specific visuals (Fill / FG)
-                    Transform staminaFill = backgroundObj.transform
-                    .Find("LayoutGroup/MaxStamina/Back/Stamina/Fill");
-                    if (staminaFill != null)
-                        staminaFill.gameObject.SetActive(false);
-
-                    // Make background a clean dark box
-                    Transform back = backgroundObj.transform.Find("LayoutGroup/MaxStamina/Back");
-                    if (back != null)
+                    // Remove StaminaBar component from ChatBackground
+                    var staminaBar = backgroundObj.GetComponent<StaminaBar>();
+                    if (staminaBar != null)
                     {
-                        var image = back.GetComponent<UnityEngine.UI.Image>();
-                        if (image != null)
+                        Destroy(staminaBar);
+                    }
+
+                    // Clean up unused HUD children inside ChatBackground
+                    string[] nestedPathsToDelete = {
+                        "MoraleBoost",
+                        "FullBar",
+                        "OutlineOverflowLine",
+                        "LayoutGroup"
+                    };
+
+                    foreach (string path in nestedPathsToDelete)
+                    {
+                        var child = backgroundObj.transform.Find(path);
+                        if (child != null)
                         {
-                            image.color = new Color(0f, 0f, 0f, 0.5f); // darkened clean color
-                            image.sprite = null;
+                            Destroy(child.gameObject);
                         }
                     }
                 }
@@ -600,6 +607,18 @@ namespace TextChatMod
             }
         }
 
+        private static void RemoveFirstMessage(PlayerConnectionLog instance)
+        {
+            var currentLogField = typeof(PlayerConnectionLog).GetField("currentLog", BindingFlags.NonPublic | BindingFlags.Instance);
+            var currentLog = (List<string>)currentLogField.GetValue(instance);
+
+            if (currentLog.Count > 0)
+            {
+                currentLog.RemoveAt(0);
+                var rebuildMethod = typeof(PlayerConnectionLog).GetMethod("RebuildString", BindingFlags.NonPublic | BindingFlags.Instance);
+                rebuildMethod.Invoke(instance, null);
+            }
+        }
 
         // Patch to modify the timeout duration for chat messages
         [HarmonyPatch(typeof(PlayerConnectionLog), "TimeoutMessageRoutine")]
@@ -613,18 +632,31 @@ namespace TextChatMod
 
             static System.Collections.IEnumerator CustomTimeoutRoutine(PlayerConnectionLog instance)
             {
-                yield return new WaitForSeconds(messageTimeout.Value);
-
-                var currentLogField = typeof(PlayerConnectionLog).GetField("currentLog", BindingFlags.NonPublic | BindingFlags.Instance);
-                var currentLog = (List<string>)currentLogField.GetValue(instance);
-
-                if (currentLog.Count > 0)
+                var logText = instance.GetComponentInChildren<TextMeshProUGUI>();
+                if (logText == null)
                 {
-                    currentLog.RemoveAt(0);
-
-                    var rebuildMethod = typeof(PlayerConnectionLog).GetMethod("RebuildString", BindingFlags.NonPublic | BindingFlags.Instance);
-                    rebuildMethod.Invoke(instance, null);
+                    yield return new WaitForSeconds(TextChatPlugin.messageTimeout.Value);
+                    RemoveFirstMessage(instance);
+                    yield break;
                 }
+
+                yield return new WaitForSeconds(TextChatPlugin.messageTimeout.Value - 1.5f); // Delay before fade
+
+                float duration = 1.5f;
+                float elapsed = 0f;
+
+                Color startColor = logText.color;
+                Color fadedColor = new Color(startColor.r, startColor.g, startColor.b, 0f);
+
+                while (elapsed < duration)
+                {
+                    elapsed += Time.deltaTime;
+                    logText.color = Color.Lerp(startColor, fadedColor, elapsed / duration);
+                    yield return null;
+                }
+
+                RemoveFirstMessage(instance);
+                logText.color = startColor; // Reset for future messages
             }
         }
     }
