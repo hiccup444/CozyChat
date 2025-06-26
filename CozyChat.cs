@@ -490,26 +490,43 @@ namespace TextChatMod
             CloseChat();
         }
 
+        private static Color GetPlayerColorFromCharacter(string playerName)
+        {
+            try
+            {
+                foreach (var ch in GameObject.FindObjectsByType<Character>(FindObjectsSortMode.None))
+                {
+                    var nick = ch.photonView?.Owner?.NickName;
+                    if (!string.IsNullOrEmpty(nick) && nick == playerName)
+                    {
+                        return ch.refs.customization.PlayerColor;
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                TextChatPlugin.Instance.Logger.LogWarning($"Failed to find player color for {playerName}: {e.Message}");
+            }
+
+            return Color.white;
+        }
+
+
         public static void DisplayChatMessage(string playerName, string message)
         {
             if (!connectionLog) return;
 
-            // Use reflection to call the private AddMessage method
+            // Try to get player's actual skin color
+            Color userColor = GetPlayerColorFromCharacter(playerName);
+
             var addMessageMethod = typeof(PlayerConnectionLog).GetMethod("AddMessage", BindingFlags.NonPublic | BindingFlags.Instance);
             var getColorTagMethod = typeof(PlayerConnectionLog).GetMethod("GetColorTag", BindingFlags.NonPublic | BindingFlags.Instance);
 
-            if (addMessageMethod != null && getColorTagMethod != null)
-            {
-                // Get the user color from the connection log
-                var userColorField = typeof(PlayerConnectionLog).GetField("userColor", BindingFlags.Public | BindingFlags.Instance);
-                Color userColor = (Color)userColorField.GetValue(connectionLog);
+            string nameColorTag = (string)getColorTagMethod.Invoke(connectionLog, new object[] { userColor });
+            string msgColorTag = (string)getColorTagMethod.Invoke(connectionLog, new object[] { chatMessageColor.Value });
 
-                string userColorTag = (string)getColorTagMethod.Invoke(connectionLog, new object[] { userColor });
-                string messageColorTag = (string)getColorTagMethod.Invoke(connectionLog, new object[] { chatMessageColor.Value });
-
-                string formattedMessage = $"{userColorTag}{playerName}</color>{messageColorTag}: {message}</color>";
-                addMessageMethod.Invoke(connectionLog, new object[] { formattedMessage });
-            }
+            string formatted = $"{nameColorTag}{playerName}</color>{msgColorTag}: {message}</color>";
+            addMessageMethod.Invoke(connectionLog, new object[] { formatted });
         }
 
         // Photon event handling
