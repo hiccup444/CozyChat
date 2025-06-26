@@ -204,146 +204,175 @@ namespace TextChatMod
         {
             try
             {
-                Logger.LogInfo("Creating chat UI...");
+                Logger.LogInfo("Creating chat UI…");
 
-                // Find the canvas that the PlayerConnectionLog is using
+                // ───────────────────────────────────────────────────────────
+                // 1. Locate parent canvas + the health-bar template
+                // ───────────────────────────────────────────────────────────
                 Canvas parentCanvas = connectionLog.GetComponentInParent<Canvas>();
                 if (!parentCanvas)
                 {
-                    Logger.LogError("Could not find parent canvas!");
+                    Logger.LogError("ChatUI: Parent canvas not found!");
                     return;
                 }
 
-                // Create main UI container
+                GameObject originalBar = GameObject.Find("/GAME/GUIManager/Canvas_HUD/BarGroup/Bar");
+                if (originalBar == null)
+                {
+                    Logger.LogWarning("ChatUI: Health bar not found, falling back to plain box.");
+                }
+
+                // ───────────────────────────────────────────────────────────
+                // 2. Root container
+                // ───────────────────────────────────────────────────────────
                 chatInputUI = new GameObject("ChatInputUI");
                 chatInputUI.transform.SetParent(parentCanvas.transform, false);
 
-                var mainRect = chatInputUI.AddComponent<RectTransform>();
-                mainRect.anchorMin = new Vector2(0, 0);
-                mainRect.anchorMax = new Vector2(1, 1);
-                mainRect.offsetMin = Vector2.zero;
-                mainRect.offsetMax = Vector2.zero;
+                RectTransform rootRT = chatInputUI.AddComponent<RectTransform>();
+                rootRT.anchorMin = new Vector2(0, 0);
+                rootRT.anchorMax = new Vector2(1, 1);
+                rootRT.offsetMin = Vector2.zero;
+                rootRT.offsetMax = Vector2.zero;
 
-                // Create background panel
-                var backgroundObj = new GameObject("ChatBackground");
-                backgroundObj.transform.SetParent(chatInputUI.transform, false);
+                // ───────────────────────────────────────────────────────────
+                // 3. Background (clone the bar or make a box)
+                // ───────────────────────────────────────────────────────────
+                GameObject backgroundObj;
 
-                var bgRect = backgroundObj.AddComponent<RectTransform>();
-                bgRect.anchorMin = new Vector2(0, 0);
-                bgRect.anchorMax = new Vector2(0.5f, 0);
-                bgRect.pivot = new Vector2(0, 0);
-                bgRect.anchoredPosition = new Vector2(10, 10);
-                bgRect.sizeDelta = new Vector2(-20, 40);
+                if (originalBar != null)
+                {
+                    backgroundObj = Instantiate(originalBar, chatInputUI.transform);
+                    backgroundObj.name = "ChatBackground";
 
-                var bgImage = backgroundObj.AddComponent<UnityEngine.UI.Image>();
-                bgImage.color = new Color(0, 0, 0, 0.8f);
+                    // Disable health-specific visuals (Fill / FG)
+                    Transform staminaFill = backgroundObj.transform
+                    .Find("LayoutGroup/MaxStamina/Back/Stamina/Fill");
+                    if (staminaFill != null)
+                        staminaFill.gameObject.SetActive(false);
 
-                // Create the input field with proper setup
-                var inputFieldObj = new GameObject("ChatInputField");
-                inputFieldObj.transform.SetParent(backgroundObj.transform, false);
+                    // Make background a clean dark box
+                    Transform back = backgroundObj.transform.Find("LayoutGroup/MaxStamina/Back");
+                    if (back != null)
+                    {
+                        var image = back.GetComponent<UnityEngine.UI.Image>();
+                        if (image != null)
+                        {
+                            image.color = new Color(0f, 0f, 0f, 0.5f); // darkened clean color
+                            image.sprite = null;
+                        }
+                    }
+                }
+                else
+                {
+                    // Fallback – simple dark box
+                    backgroundObj = new GameObject("ChatBackground");
+                    backgroundObj.transform.SetParent(chatInputUI.transform, false);
+                    var img = backgroundObj.AddComponent<UnityEngine.UI.Image>();
+                    img.color = new Color(0, 0, 0, 0.75f);
+                }
 
-                var inputRect = inputFieldObj.AddComponent<RectTransform>();
-                inputRect.anchorMin = new Vector2(0, 0);
-                inputRect.anchorMax = new Vector2(1, 1);
-                inputRect.offsetMin = new Vector2(5, 5);
-                inputRect.offsetMax = new Vector2(-5, -5);
+                RectTransform bgRT = backgroundObj.GetComponent<RectTransform>();
+                if (bgRT == null) bgRT = backgroundObj.AddComponent<RectTransform>();
+                bgRT.anchorMin = new Vector2(0, 0);
+                bgRT.anchorMax = new Vector2(0, 0); // no horizontal stretch
+                bgRT.pivot = new Vector2(0, 0);
+                bgRT.anchoredPosition = new Vector2(69, 10); // ⬅ push it right
+                bgRT.sizeDelta = new Vector2(500, 40);       // same width
 
-                // Add input field background
-                var inputImage = inputFieldObj.AddComponent<UnityEngine.UI.Image>();
-                inputImage.color = new Color(0.1f, 0.1f, 0.1f, 1f);
+                // ───────────────────────────────────────────────────────────
+                // 4. Input-field hierarchy
+                // ───────────────────────────────────────────────────────────
+                GameObject inputGO = new GameObject("ChatInputField");
+                inputGO.transform.SetParent(backgroundObj.transform, false);
 
-                // Create viewport (required for TMP_InputField)
-                var viewportObj = new GameObject("Text Area");
-                viewportObj.transform.SetParent(inputFieldObj.transform, false);
+                RectTransform inputRT = inputGO.AddComponent<RectTransform>();
+                inputRT.anchorMin = new Vector2(0, 0);
+                inputRT.anchorMax = new Vector2(1, 1);
+                inputRT.offsetMin = new Vector2(8, 4);   // padding left / bottom
+                inputRT.offsetMax = new Vector2(-8, -4); // padding right / top
 
-                var viewportRect = viewportObj.AddComponent<RectTransform>();
-                viewportRect.anchorMin = new Vector2(0, 0);
-                viewportRect.anchorMax = new Vector2(1, 1);
-                viewportRect.offsetMin = new Vector2(10, 5);
-                viewportRect.offsetMax = new Vector2(-10, -5);
+                // NOTE:  we intentionally do NOT add an Image here (avoids grey overlay)
 
-                // Add mask to viewport
-                viewportObj.AddComponent<UnityEngine.UI.RectMask2D>();
+                // Viewport (TMP requirement)
+                GameObject viewportGO = new GameObject("Viewport");
+                viewportGO.transform.SetParent(inputGO.transform, false);
 
-                // Create text component
-                var textObj = new GameObject("Text");
-                textObj.transform.SetParent(viewportObj.transform, false);
+                RectTransform vpRT = viewportGO.AddComponent<RectTransform>();
+                vpRT.anchorMin = Vector2.zero;
+                vpRT.anchorMax = Vector2.one;
+                vpRT.offsetMin = Vector2.zero;
+                vpRT.offsetMax = Vector2.zero;
+                viewportGO.AddComponent<UnityEngine.UI.RectMask2D>();
 
-                var textRect = textObj.AddComponent<RectTransform>();
-                textRect.anchorMin = new Vector2(0, 0);
-                textRect.anchorMax = new Vector2(1, 1);
-                textRect.offsetMin = Vector2.zero;
-                textRect.offsetMax = Vector2.zero;
-                textRect.pivot = new Vector2(0, 0.5f);
-                textRect.anchoredPosition = Vector2.zero;
+                // Text component
+                GameObject textGO = new GameObject("Text");
+                textGO.transform.SetParent(viewportGO.transform, false);
 
-                var text = textObj.AddComponent<TextMeshProUGUI>();
-                text.text = "";
+                RectTransform textRT = textGO.AddComponent<RectTransform>();
+                textRT.anchorMin = Vector2.zero;
+                textRT.anchorMax = Vector2.one;
+                textRT.offsetMin = Vector2.zero;
+                textRT.offsetMax = Vector2.zero;
+
+                var text = textGO.AddComponent<TextMeshProUGUI>();
+                text.text = string.Empty;
+                text.fontSize = 20;
                 text.color = Color.white;
-                text.fontSize = 16;
-                text.alignment = TextAlignmentOptions.Left;
-                text.fontStyle = FontStyles.Normal;
+                text.alignment = TextAlignmentOptions.TopLeft;
 
-                // Create placeholder
-                var placeholderObj = new GameObject("Placeholder");
-                placeholderObj.transform.SetParent(viewportObj.transform, false);
+                // Placeholder
+                GameObject placeholderGO = new GameObject("Placeholder");
+                placeholderGO.transform.SetParent(viewportGO.transform, false);
 
-                var placeholderRect = placeholderObj.AddComponent<RectTransform>();
-                placeholderRect.anchorMin = new Vector2(0, 0);
-                placeholderRect.anchorMax = new Vector2(1, 1);
-                placeholderRect.offsetMin = Vector2.zero;
-                placeholderRect.offsetMax = Vector2.zero;
-                placeholderRect.pivot = new Vector2(0, 0.5f);
-                placeholderRect.anchoredPosition = Vector2.zero;
+                RectTransform phRT = placeholderGO.AddComponent<RectTransform>();
+                phRT.anchorMin = Vector2.zero;
+                phRT.anchorMax = Vector2.one;
+                phRT.offsetMin = Vector2.zero;
+                phRT.offsetMax = Vector2.zero;
 
-                var placeholder = placeholderObj.AddComponent<TextMeshProUGUI>();
+                var placeholder = placeholderGO.AddComponent<TextMeshProUGUI>();
                 placeholder.text = "Type a message and press Enter to send...";
-                placeholder.color = new Color(0.7f, 0.7f, 0.7f, 0.7f);
-                placeholder.fontSize = 16;
-                placeholder.alignment = TextAlignmentOptions.Left;
+                placeholder.fontSize = 20;
+                placeholder.alignment = TextAlignmentOptions.TopLeft;
                 placeholder.fontStyle = FontStyles.Italic;
+                placeholder.color = new Color(1, 1, 1, 0.55f);
 
-                // Setup the input field component
-                chatInputField = inputFieldObj.AddComponent<TMP_InputField>();
-                chatInputField.textViewport = viewportRect;
+                // ───────────────────────────────────────────────────────────
+                // 5. Match the font used in the scroll-log
+                // ───────────────────────────────────────────────────────────
+                TMP_FontAsset logFont = connectionLog.GetComponentInChildren<TextMeshProUGUI>()?.font;
+                if (logFont != null)
+                {
+                    text.font = logFont;
+                    placeholder.font = logFont;
+                }
+
+                // ───────────────────────────────────────────────────────────
+                // 6. Configure TMP_InputField
+                // ───────────────────────────────────────────────────────────
+                chatInputField = inputGO.AddComponent<TMP_InputField>();
+                chatInputField.textViewport = vpRT;
                 chatInputField.textComponent = text;
                 chatInputField.placeholder = placeholder;
                 chatInputField.characterLimit = maxMessageLength.Value;
                 chatInputField.contentType = TMP_InputField.ContentType.Standard;
                 chatInputField.lineType = TMP_InputField.LineType.SingleLine;
-                chatInputField.interactable = true;
                 chatInputField.richText = false;
-
-                // Set selection color
                 chatInputField.selectionColor = new Color(0.5f, 0.5f, 1f, 0.5f);
                 chatInputField.caretColor = Color.white;
                 chatInputField.caretWidth = 2;
                 chatInputField.caretBlinkRate = 0.85f;
 
-                // Add input field callbacks to debug
-                chatInputField.onValueChanged.AddListener((value) => {
-                    Logger.LogInfo($"Input field value changed: '{value}'");
-                });
-
-                chatInputField.onSelect.AddListener((value) => {
-                    Logger.LogInfo("Input field selected!");
-                });
-
-                chatInputField.onDeselect.AddListener((value) => {
-                    Logger.LogInfo("Input field deselected!");
-                });
-
-                // Initially hide the UI
                 chatInputUI.SetActive(false);
 
                 Logger.LogInfo("Chat UI created successfully!");
-                Logger.LogInfo($"Canvas found: {parentCanvas.name}, Render mode: {parentCanvas.renderMode}");
             }
             catch (Exception e)
             {
-                Logger.LogError($"Error creating chat UI: {e.Message}\n{e.StackTrace}");
+                Logger.LogError($"Error creating chat UI: {e}");
             }
         }
+
 
         private TMP_Text CreatePlaceholder(Transform parent)
         {
@@ -468,7 +497,7 @@ namespace TextChatMod
                 // works if the Character class is present in this game
                 isDead = Character.localCharacter?.data?.dead ?? false;
             }
-            catch {}
+            catch { }
 
             object[] peakPayload = new object[]
             {
