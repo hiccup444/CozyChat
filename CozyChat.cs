@@ -13,15 +13,16 @@ using ExitGames.Client.Photon;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
 using System.Text.RegularExpressions;
+using UnityEngine.SceneManagement;
 
 namespace TextChatMod
 {
-    [BepInPlugin("com.hiccup.textchat", "CozyChat", "1.0.0")]
+    [BepInPlugin("com.hiccup.textchat", "CozyChat", "1.3.0")]
     public class TextChatPlugin : BaseUnityPlugin
     {
-        public static TextChatPlugin Instance; // Made public so InputPatches can access it
+        public static TextChatPlugin Instance;
         private static PlayerConnectionLog connectionLog;
-        public static bool isTyping = false; // Made public so InputPatches can access it
+        public static bool isTyping = false;
         private static GameObject chatInputUI;
         private static TMP_InputField chatInputField;
         private static List<MonoBehaviour> disabledControllers = new List<MonoBehaviour>();
@@ -37,6 +38,9 @@ namespace TextChatMod
         private static ConfigEntry<Color> chatMessageColor;
         private static ConfigEntry<float> messageTimeout;
         private static ConfigEntry<int> maxMessageLength;
+        private static ConfigEntry<bool> hideDeadMessages;
+        private static ConfigEntry<float> chatProximityRange;
+
 
         void Awake()
         {
@@ -46,6 +50,9 @@ namespace TextChatMod
             chatMessageColor = Config.Bind("General", "MessageColor", new Color(1f, 1f, 1f, 1f), "Color of chat messages");
             messageTimeout = Config.Bind("General", "MessageTimeout", 10f, "How long messages stay on screen");
             maxMessageLength = Config.Bind("General", "MaxMessageLength", 100, "Maximum length of chat messages");
+            hideDeadMessages = Config.Bind("General", "HideDeadMessages", true, "If enabled, alive players will not see chat from dead/unconscious players.");
+            chatProximityRange = Config.Bind("General", "ChatProximityRange", 0f, "Maximum distance for receiving chat messages. 0 = unlimited range.");
+            SceneManager.activeSceneChanged += OnSceneChanged;
 
             Harmony harmony = new Harmony("com.yourname.textchat");
             harmony.PatchAll();
@@ -60,7 +67,6 @@ namespace TextChatMod
         {
             if (!connectionLog)
             {
-                // Try to find the PlayerConnectionLog instance
                 connectionLog = FindFirstObjectByType<PlayerConnectionLog>();
                 if (connectionLog)
                 {
@@ -69,7 +75,6 @@ namespace TextChatMod
                 }
                 else
                 {
-                    // Try alternative search methods
                     var allLogs = FindObjectsByType<PlayerConnectionLog>(FindObjectsSortMode.None);
                     if (allLogs.Length > 0)
                     {
@@ -81,7 +86,6 @@ namespace TextChatMod
                 return;
             }
 
-            // Handle chat input
             if (Input.GetKeyDown(chatKey.Value) && !isTyping)
             {
                 Logger.LogInfo("Chat key pressed!");
@@ -89,7 +93,6 @@ namespace TextChatMod
             }
             else if (isTyping)
             {
-                // Handle input while typing
                 if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter))
                 {
                     SendMessage();
@@ -99,17 +102,14 @@ namespace TextChatMod
                     CloseChat();
                 }
 
-                // Keep trying to maintain focus
                 if (chatInputField != null && !chatInputField.isFocused)
                 {
                     chatInputField.Select();
                     chatInputField.ActivateInputField();
                 }
 
-                // Manual input capture as fallback
                 if (chatInputField != null && !chatInputField.isFocused)
                 {
-                    // Capture any text input manually
                     string inputString = Input.inputString;
                     if (!string.IsNullOrEmpty(inputString))
                     {
@@ -124,7 +124,6 @@ namespace TextChatMod
                             }
                             else if (c == '\n' || c == '\r') // Enter
                             {
-                                // Already handled above
                             }
                             else if (c != '\0' && !char.IsControl(c))
                             {
@@ -160,10 +159,8 @@ namespace TextChatMod
         {
             Logger.LogInfo("TextChatPlugin Start() called");
 
-            // Try to find connection log immediately
             StartCoroutine(FindConnectionLogCoroutine());
 
-            // Register Photon event handler
             if (!eventHandlerRegistered && PhotonNetwork.NetworkingClient != null)
             {
                 PhotonNetwork.NetworkingClient.EventReceived += OnEvent;
@@ -180,7 +177,6 @@ namespace TextChatMod
                 connectionLog = FindFirstObjectByType<PlayerConnectionLog>();
                 if (!connectionLog)
                 {
-                    // Try with regular FindObjectOfType as fallback
                     var go = GameObject.Find("PlayerConnectionLog");
                     if (go) connectionLog = go.GetComponent<PlayerConnectionLog>();
                 }
@@ -202,15 +198,36 @@ namespace TextChatMod
             }
         }
 
+        private static bool startupMessageShown = false;
+
+        private void OnSceneChanged(Scene oldScene, Scene newScene)
+        {
+            if (startupMessageShown) return;
+
+            if (newScene.name.ToLower().Contains("airport"))
+            {
+                startupMessageShown = true;
+                Logger.LogInfo("Airport scene detected, showing CozyChat startup message...");
+
+                StartCoroutine(ShowStartupMessage());
+            }
+        }
+
+        private System.Collections.IEnumerator ShowStartupMessage()
+        {
+            yield return new WaitForSeconds(0.25f); // Give time for UI to appear
+
+            DisplayChatMessage("[CozyChat]", $"CozyChat v{Info.Metadata.Version} successfully loaded.");
+            yield return new WaitForSeconds(0.25f);
+            DisplayChatMessage("[CozyChat]", $"Use /help or /commands to change options.");
+        }
+
         private void CreateChatUI()
         {
             try
             {
                 Logger.LogInfo("Creating chat UI…");
 
-                // ───────────────────────────────────────────────────────────
-                // 1. Locate parent canvas + the health-bar template
-                // ───────────────────────────────────────────────────────────
                 Canvas parentCanvas = connectionLog.GetComponentInParent<Canvas>();
                 if (!parentCanvas)
                 {
@@ -224,9 +241,6 @@ namespace TextChatMod
                     Logger.LogWarning("ChatUI: Health bar not found, falling back to plain box.");
                 }
 
-                // ───────────────────────────────────────────────────────────
-                // 2. Root container
-                // ───────────────────────────────────────────────────────────
                 chatInputUI = new GameObject("ChatInputUI");
                 chatInputUI.transform.SetParent(parentCanvas.transform, false);
 
@@ -236,9 +250,6 @@ namespace TextChatMod
                 rootRT.offsetMin = Vector2.zero;
                 rootRT.offsetMax = Vector2.zero;
 
-                // ───────────────────────────────────────────────────────────
-                // 3. Background (clone the bar or make a box)
-                // ───────────────────────────────────────────────────────────
                 GameObject backgroundObj;
 
                 if (originalBar != null)
@@ -246,14 +257,12 @@ namespace TextChatMod
                     backgroundObj = Instantiate(originalBar, chatInputUI.transform);
                     backgroundObj.name = "ChatBackground";
 
-                    // Remove StaminaBar component from ChatBackground
                     var staminaBar = backgroundObj.GetComponent<StaminaBar>();
                     if (staminaBar != null)
                     {
                         Destroy(staminaBar);
                     }
 
-                    // Clean up unused HUD children inside ChatBackground
                     string[] nestedPathsToDelete = {
                         "MoraleBoost",
                         "FullBar",
@@ -272,7 +281,6 @@ namespace TextChatMod
                 }
                 else
                 {
-                    // Fallback – simple dark box
                     backgroundObj = new GameObject("ChatBackground");
                     backgroundObj.transform.SetParent(chatInputUI.transform, false);
                     var img = backgroundObj.AddComponent<UnityEngine.UI.Image>();
@@ -282,26 +290,20 @@ namespace TextChatMod
                 RectTransform bgRT = backgroundObj.GetComponent<RectTransform>();
                 if (bgRT == null) bgRT = backgroundObj.AddComponent<RectTransform>();
                 bgRT.anchorMin = new Vector2(0, 0);
-                bgRT.anchorMax = new Vector2(0, 0); // no horizontal stretch
+                bgRT.anchorMax = new Vector2(0, 0);
                 bgRT.pivot = new Vector2(0, 0);
-                bgRT.anchoredPosition = new Vector2(69, 10); // ⬅ push it right
-                bgRT.sizeDelta = new Vector2(500, 40);       // same width
+                bgRT.anchoredPosition = new Vector2(69, 10);
+                bgRT.sizeDelta = new Vector2(500, 40);
 
-                // ───────────────────────────────────────────────────────────
-                // 4. Input-field hierarchy
-                // ───────────────────────────────────────────────────────────
                 GameObject inputGO = new GameObject("ChatInputField");
                 inputGO.transform.SetParent(backgroundObj.transform, false);
 
                 RectTransform inputRT = inputGO.AddComponent<RectTransform>();
                 inputRT.anchorMin = new Vector2(0, 0);
                 inputRT.anchorMax = new Vector2(1, 1);
-                inputRT.offsetMin = new Vector2(8, 4);   // padding left / bottom
-                inputRT.offsetMax = new Vector2(-8, -4); // padding right / top
+                inputRT.offsetMin = new Vector2(8, 4);
+                inputRT.offsetMax = new Vector2(-8, -4);
 
-                // NOTE:  we intentionally do NOT add an Image here (avoids grey overlay)
-
-                // Viewport (TMP requirement)
                 GameObject viewportGO = new GameObject("Viewport");
                 viewportGO.transform.SetParent(inputGO.transform, false);
 
@@ -312,7 +314,6 @@ namespace TextChatMod
                 vpRT.offsetMax = Vector2.zero;
                 viewportGO.AddComponent<UnityEngine.UI.RectMask2D>();
 
-                // Text component
                 GameObject textGO = new GameObject("Text");
                 textGO.transform.SetParent(viewportGO.transform, false);
 
@@ -328,7 +329,6 @@ namespace TextChatMod
                 text.color = Color.white;
                 text.alignment = TextAlignmentOptions.TopLeft;
 
-                // Placeholder
                 GameObject placeholderGO = new GameObject("Placeholder");
                 placeholderGO.transform.SetParent(viewportGO.transform, false);
 
@@ -345,9 +345,6 @@ namespace TextChatMod
                 placeholder.fontStyle = FontStyles.Italic;
                 placeholder.color = new Color(1, 1, 1, 0.55f);
 
-                // ───────────────────────────────────────────────────────────
-                // 5. Match the font used in the scroll-log
-                // ───────────────────────────────────────────────────────────
                 TMP_FontAsset logFont = connectionLog.GetComponentInChildren<TextMeshProUGUI>()?.font;
                 if (logFont != null)
                 {
@@ -355,9 +352,6 @@ namespace TextChatMod
                     placeholder.font = logFont;
                 }
 
-                // ───────────────────────────────────────────────────────────
-                // 6. Configure TMP_InputField
-                // ───────────────────────────────────────────────────────────
                 chatInputField = inputGO.AddComponent<TMP_InputField>();
                 chatInputField.textViewport = vpRT;
                 chatInputField.textComponent = text;
@@ -418,24 +412,20 @@ namespace TextChatMod
                 Logger.LogInfo("Created EventSystem");
             }
 
-            // Clear and focus the input field
             chatInputField.text = "";
             chatInputField.interactable = true;
             chatInputField.Select();
             chatInputField.ActivateInputField();
             chatInputField.ForceLabelUpdate();
 
-            // Set as selected game object
             eventSystem.SetSelectedGameObject(chatInputField.gameObject);
 
-            // Force focus
             StartCoroutine(ForceFocusInputField());
 
             Logger.LogInfo($"Chat UI active: {chatInputUI.activeSelf}, Input field interactable: {chatInputField.interactable}");
             Logger.LogInfo($"Input field selected: {chatInputField.isFocused}");
             Logger.LogInfo($"EventSystem selected object: {eventSystem.currentSelectedGameObject?.name}");
 
-            // Disable movement and jumping
             try
             {
                 var ch = Character.localCharacter;
@@ -454,7 +444,7 @@ namespace TextChatMod
 
         private System.Collections.IEnumerator ForceFocusInputField()
         {
-            yield return null; // Wait one frame
+            yield return null;
             if (chatInputField != null && isTyping)
             {
                 chatInputField.Select();
@@ -473,7 +463,6 @@ namespace TextChatMod
 
             chatInputField.DeactivateInputField();
 
-            // Restore movement and jumping
             try
             {
                 var ch = Character.localCharacter;
@@ -489,6 +478,72 @@ namespace TextChatMod
             }
         }
 
+        private static bool HandleChatCommand(string message)
+        {
+            if (!message.StartsWith("/"))
+                return false;
+
+            var args = message.Trim().Split(' ');
+
+            switch (args[0].ToLower())
+            {
+                case "/help":
+                case "/commands":
+                    DisplayChatMessage("[ChatMod]", "Available commands:\n" +
+                        "/help or /commands - Show this list\n" +
+                        "/config - Show current config values\n" +
+                        "/chatProximityRange value - Set chat proximity range (0 = unlimited)\n" +
+                        "/hideDeadMessages true/false - Show or hide dead/unconscious player chat\n" +
+                        "/reset - Reset all configs to default values");
+                    return true;
+
+                case "/config":
+                    DisplayChatMessage("[ChatMod]", $"Current config:\n" +
+                        $"- ChatProximityRange: {chatProximityRange.Value}\n" +
+                        $"- HideDeadMessages: {hideDeadMessages.Value}");
+                    return true;
+
+                case "/chatproximityrange":
+                    if (args.Length >= 2 && float.TryParse(args[1], out float range))
+                    {
+                        chatProximityRange.Value = range;
+                        TextChatPlugin.Instance.Config.Save();
+                        DisplayChatMessage("[ChatMod]", $"Set chat proximity range to {range}");
+                    }
+                    else
+                    {
+                        DisplayChatMessage("[ChatMod]", "Usage: /chatProximityRange value");
+                    }
+                    return true;
+
+                case "/hidedeadmessages":
+                    if (args.Length >= 2 && bool.TryParse(args[1], out bool hideDead))
+                    {
+                        hideDeadMessages.Value = hideDead;
+                        TextChatPlugin.Instance.Config.Save();
+                        DisplayChatMessage("[ChatMod]", $"Set hide dead messages to {hideDead}");
+                    }
+                    else
+                    {
+                        DisplayChatMessage("[ChatMod]", "Usage: /hideDeadMessages true/false");
+                    }
+                    return true;
+
+                case "/reset":
+                    chatProximityRange.Value = (float)chatProximityRange.DefaultValue;
+                    hideDeadMessages.Value = (bool)hideDeadMessages.DefaultValue;
+                    TextChatPlugin.Instance.Config.Save();
+                    DisplayChatMessage("[ChatMod]", "Config reset to default values.");
+                    return true;
+
+                default:
+                    DisplayChatMessage("[ChatMod]", $"Unknown command: {args[0]}");
+                    return true;
+            }
+        }
+
+
+
         private void SendMessage()
         {
             string message = chatInputField.text.Trim();
@@ -498,34 +553,34 @@ namespace TextChatMod
                 return;
             }
 
-            // Build the Peak N Speak payload
+            if (HandleChatCommand(message))
+            {
+                CloseChat();
+                return;
+            }
+
             bool isDead = false;
             try
             {
-                // works if the Character class is present in this game
                 isDead = Character.localCharacter?.data?.dead ?? false;
             }
             catch { }
 
             object[] peakPayload = new object[]
             {
-        PhotonNetwork.LocalPlayer.NickName,   // [0] username
-        message,                              // [1] text
-        PhotonNetwork.LocalPlayer.UserId,     // [2] userid
-        isDead.ToString()                     // [3] "True"/"False"
+        PhotonNetwork.LocalPlayer.NickName,
+        message,
+        PhotonNetwork.LocalPlayer.UserId,
+        isDead.ToString()
             };
 
             RaiseEventOptions opts = new RaiseEventOptions { Receivers = ReceiverGroup.All };
 
-            // Send in Peak N Speak format so they can read us
             PhotonNetwork.RaiseEvent(CHAT_EVENT_CODE_PEAK, peakPayload, opts, SendOptions.SendReliable);
-
-            // (optional) still send our legacy format for old clients
-            /* object[] legacy = new object[] { peakPayload[0], message };
-               PhotonNetwork.RaiseEvent(CHAT_EVENT_CODE_LEGACY, legacy, opts, SendOptions.SendReliable); */
 
             CloseChat();
         }
+
 
         private static Color GetPlayerColorFromCharacter(string playerName)
         {
@@ -553,7 +608,6 @@ namespace TextChatMod
         {
             if (!connectionLog) return;
 
-            // Try to get player's actual skin color
             Color userColor = GetPlayerColorFromCharacter(playerName);
 
             var addMessageMethod = typeof(PlayerConnectionLog).GetMethod("AddMessage", BindingFlags.NonPublic | BindingFlags.Instance);
@@ -568,19 +622,35 @@ namespace TextChatMod
             addMessageMethod.Invoke(connectionLog, new object[] { formatted });
         }
 
-        // Photon event handling
-        private const byte CHAT_EVENT_CODE_LEGACY = 77; // old event code
-        private const byte CHAT_EVENT_CODE_PEAK = 81;   // Peak N Speak
+        private const byte CHAT_EVENT_CODE_LEGACY = 77;
+        private const byte CHAT_EVENT_CODE_PEAK = 81;
         private static bool eventHandlerRegistered = false;
 
         void OnDestroy()
         {
-            // Unregister event handler
             if (eventHandlerRegistered && PhotonNetwork.NetworkingClient != null)
             {
                 PhotonNetwork.NetworkingClient.EventReceived -= OnEvent;
                 eventHandlerRegistered = false;
             }
+        }
+
+        private static Vector3 GetCharacterPosition(Character character)
+        {
+            try
+            {
+                if (character.Head != null)
+                    return character.Head;
+            }
+            catch { }
+
+            try
+            {
+                return character.Center;
+            }
+            catch { }
+
+            return character.transform.position;
         }
 
         private static void OnEvent(EventData ev)
@@ -589,25 +659,88 @@ namespace TextChatMod
             {
                 case CHAT_EVENT_CODE_PEAK:
                     {
-                        // Peak N Speak: [nick, msg, userid, isDead]
                         var data = (object[])ev.CustomData;
                         string nick = data[0]?.ToString() ?? "???";
                         string msg = data[1]?.ToString() ?? "";
+                        string userId = data[2]?.ToString() ?? "";
                         bool isDead = bool.TryParse(data[3]?.ToString(), out var d) && d;
 
-                        if (isDead) nick = "<color=red>[DEAD]</color> " + nick;
+                        Instance.Logger.LogInfo($"[ChatMod] Received message from '{nick}' (UserId: {userId}), dead={isDead}, message={msg}");
+
+                        if (isDead)
+                            nick = "<color=red>[DEAD]</color> " + nick;
+
+                        try
+                        {
+                            var local = Character.localCharacter;
+                            if (local != null && !local.data.dead && !local.data.fullyPassedOut)
+                            {
+                                if (hideDeadMessages.Value && isDead)
+                                {
+                                    Instance.Logger.LogInfo($"[ChatMod] Hiding dead message from '{nick}'");
+                                    return;
+                                }
+
+                                if (chatProximityRange.Value > 0f)
+                                {
+                                    Character sender = FindCharacterByUserId(userId);
+                                    if (sender == null)
+                                    {
+                                        Instance.Logger.LogWarning($"[ChatMod] Could not find Character for UserId '{userId}'");
+                                    }
+                                    else
+                                    {
+                                        float distance = Vector3.Distance(GetCharacterPosition(local), GetCharacterPosition(sender));
+                                        Instance.Logger.LogInfo($"[ChatMod] Distance to '{nick}': {distance} (limit {chatProximityRange.Value})");
+
+                                        if (sender != local && distance > chatProximityRange.Value)
+                                        {
+                                            Instance.Logger.LogInfo($"[ChatMod] Hiding message from '{nick}' due to distance");
+                                            return;
+                                        }
+                                    }
+
+                                }
+                            }
+                        }
+                        catch (Exception e)
+                        {
+                            Instance.Logger.LogWarning($"[ChatMod] Error filtering chat message: {e}");
+                        }
+
                         DisplayChatMessage(nick, msg);
                         break;
                     }
 
                 case CHAT_EVENT_CODE_LEGACY:
                     {
-                        // Your old mod: [nick, msg]
                         var data = (object[])ev.CustomData;
                         DisplayChatMessage(data[0]?.ToString() ?? "???", data[1]?.ToString() ?? "");
                         break;
                     }
             }
+        }
+
+
+        private static Character FindCharacterByUserId(string userId)
+        {
+            foreach (var ch in GameObject.FindObjectsByType<Character>(FindObjectsSortMode.None))
+            {
+                if (ch.photonView?.Owner?.UserId == userId)
+                    return ch;
+            }
+            return null;
+        }
+
+
+        private static Character FindCharacterByName(string name)
+        {
+            foreach (var ch in GameObject.FindObjectsByType<Character>(FindObjectsSortMode.None))
+            {
+                if (ch.photonView != null && ch.photonView.Owner != null && ch.photonView.Owner.NickName == name)
+                    return ch;
+            }
+            return null;
         }
 
         private static void RemoveFirstMessage(PlayerConnectionLog instance)
@@ -623,7 +756,6 @@ namespace TextChatMod
             }
         }
 
-        // Patch to modify the timeout duration for chat messages
         [HarmonyPatch(typeof(PlayerConnectionLog), "TimeoutMessageRoutine")]
         class TimeoutMessagePatch
         {
@@ -635,23 +767,18 @@ namespace TextChatMod
 
             static System.Collections.IEnumerator CustomTimeoutRoutine(PlayerConnectionLog instance)
             {
-                // Wait full timeout duration
                 yield return new WaitForSeconds(TextChatPlugin.messageTimeout.Value);
 
-                // Remove first message from the log
                 RemoveFirstMessage(instance);
             }
         }
     }
 
-    // Remove or simplify the InputPatches - we don't need to block ALL input
-    // Just block specific keys that the game uses for actions
     [HarmonyPatch]
     public static class InputPatches
     {
         public static bool IsTyping => TextChatPlugin.isTyping;
 
-        // Only block specific game controls, not all input
         [HarmonyPatch(typeof(Input), "GetButton", typeof(string))]
         [HarmonyPrefix]
         static bool GetButtonPrefix(string buttonName, ref bool __result)
@@ -676,7 +803,6 @@ namespace TextChatMod
             return true;
         }
 
-        // Block movement axes
         [HarmonyPatch(typeof(Input), "GetAxis", typeof(string))]
         [HarmonyPrefix]
         static bool GetAxisPrefix(string axisName, ref float __result)
@@ -700,7 +826,7 @@ namespace TextChatMod
             }
             return true;
         }
-        // Harmony patch to prevent EmoteWheel from opening while typing
+
         [HarmonyPatch(typeof(EmoteWheel), "OnEnable")]
         public static class EmoteWheel_OnEnable_Patch
         {
@@ -713,6 +839,22 @@ namespace TextChatMod
                 }
 
                 return true;
+            }
+        }
+        [HarmonyPatch]
+        public static class CharacterInteractible_CanBeCarried_Patch
+        {
+            static MethodBase TargetMethod()
+            {
+                return AccessTools.Method(typeof(CharacterInteractible), "CanBeCarried");
+            }
+
+            static void Postfix(ref bool __result)
+            {
+                if (TextChatMod.TextChatPlugin.isTyping)
+                {
+                    __result = false;
+                }
             }
         }
     }
