@@ -17,7 +17,7 @@ using UnityEngine.SceneManagement;
 
 namespace TextChatMod
 {
-    [BepInPlugin("com.hiccup.textchat", "CozyChat", "1.3.0")]
+    [BepInPlugin("com.hiccup.textchat", "CozyChat", "1.3.1")]
     public class TextChatPlugin : BaseUnityPlugin
     {
         public static TextChatPlugin Instance;
@@ -28,6 +28,8 @@ namespace TextChatMod
         private static List<MonoBehaviour> disabledControllers = new List<MonoBehaviour>();
         private static List<CharacterController> disabledCharacterControllers = new List<CharacterController>();
         private static List<Rigidbody> frozenRigidbodies = new List<Rigidbody>();
+        private static HashSet<string> playersWithMod = new HashSet<string>();
+        private static bool hasSentPingForCurrentRoom = false;
 
         public static void LogInfo(string message)
         {
@@ -133,6 +135,7 @@ namespace TextChatMod
                     }
                 }
             }
+
             // Freeze/unfreeze player movement every frame based on typing state
             try
             {
@@ -153,6 +156,19 @@ namespace TextChatMod
                 }
             }
             catch { /* Ignore errors if Character is not ready */ }
+
+            // Check if we just joined a room
+            if (PhotonNetwork.InRoom && !hasSentPingForCurrentRoom)
+            {
+                hasSentPingForCurrentRoom = true;
+                Logger.LogInfo("[CozyChat] Detected room join, sending ping");
+                StartCoroutine(WaitAndSendPingCoroutine());
+            }
+            else if (!PhotonNetwork.InRoom && hasSentPingForCurrentRoom)
+            {
+                hasSentPingForCurrentRoom = false;
+                playersWithMod.Clear();
+            }
         }
 
         void Start()
@@ -200,6 +216,11 @@ namespace TextChatMod
 
         private static bool startupMessageShown = false;
 
+        private System.Collections.IEnumerator WaitAndSendPingCoroutine()
+        {
+            yield return new WaitForSeconds(1f); // Give time for everyone to load
+            SendModPing();
+        }
         private void OnSceneChanged(Scene oldScene, Scene newScene)
         {
             if (startupMessageShown) return;
@@ -215,11 +236,65 @@ namespace TextChatMod
 
         private System.Collections.IEnumerator ShowStartupMessage()
         {
-            yield return new WaitForSeconds(0.25f); // Give time for UI to appear
-
+            yield return new WaitForSeconds(0.25f);
             DisplayChatMessage("[CozyChat]", $"CozyChat v{Info.Metadata.Version} successfully loaded.");
             yield return new WaitForSeconds(0.25f);
             DisplayChatMessage("[CozyChat]", $"Use /help or /commands to change options.");
+
+            // Start the coroutine to wait for room join
+            StartCoroutine(WaitForRoomAndSendPing());
+        }
+
+        private void SendModPing()
+        {
+            if (!PhotonNetwork.IsConnected || !PhotonNetwork.InRoom || PhotonNetwork.LocalPlayer == null)
+            {
+                Logger.LogWarning("[CozyChat] Cannot send ping - not in a room yet");
+                return;
+            }
+
+            object[] pingData = new object[]
+            {
+        PhotonNetwork.LocalPlayer.NickName,
+        PhotonNetwork.LocalPlayer.UserId,
+        Info.Metadata.Version.ToString()
+            };
+
+            RaiseEventOptions opts = new RaiseEventOptions { Receivers = ReceiverGroup.Others };
+            PhotonNetwork.RaiseEvent(CHAT_MOD_PING_EVENT, pingData, opts, SendOptions.SendReliable);
+
+            Logger.LogInfo($"[CozyChat] Sent mod detection ping to other players (InRoom: {PhotonNetwork.InRoom})");
+        }
+
+        private System.Collections.IEnumerator WaitForRoomAndSendPing()
+        {
+            // Wait until we're actually in a room
+            while (!PhotonNetwork.InRoom)
+            {
+                yield return new WaitForSeconds(0.5f);
+            }
+
+            // Additional delay to ensure everyone is settled
+            yield return new WaitForSeconds(1f);
+
+            SendModPing();
+        }
+
+        private void SendModPong()
+        {
+            if (!PhotonNetwork.IsConnected || PhotonNetwork.LocalPlayer == null) return;
+
+            object[] pongData = new object[]
+            {
+        PhotonNetwork.LocalPlayer.NickName,
+        PhotonNetwork.LocalPlayer.UserId,
+        Info.Metadata.Version.ToString()
+            };
+
+            RaiseEventOptions opts = new RaiseEventOptions { Receivers = ReceiverGroup.Others };
+            PhotonNetwork.RaiseEvent(CHAT_MOD_PONG_EVENT, pongData, opts, SendOptions.SendReliable);
+
+            Logger.LogInfo($"[CozyChat] Sent mod detection pong response");
         }
 
         private void CreateChatUI()
@@ -624,6 +699,8 @@ namespace TextChatMod
 
         private const byte CHAT_EVENT_CODE_LEGACY = 77;
         private const byte CHAT_EVENT_CODE_PEAK = 81;
+        private const byte CHAT_MOD_PING_EVENT = 82;
+        private const byte CHAT_MOD_PONG_EVENT = 83;
         private static bool eventHandlerRegistered = false;
 
         void OnDestroy()
@@ -633,6 +710,8 @@ namespace TextChatMod
                 PhotonNetwork.NetworkingClient.EventReceived -= OnEvent;
                 eventHandlerRegistered = false;
             }
+
+            playersWithMod.Clear();
         }
 
         private static Vector3 GetCharacterPosition(Character character)
@@ -718,8 +797,49 @@ namespace TextChatMod
                         DisplayChatMessage(data[0]?.ToString() ?? "???", data[1]?.ToString() ?? "");
                         break;
                     }
+                case CHAT_MOD_PING_EVENT:
+                    {
+                        // Someone joined and has the mod
+                        var data = (object[])ev.CustomData;
+                        string senderNick = data[0]?.ToString() ?? "???";
+                        string senderUserId = data[1]?.ToString() ?? "";
+                        string senderVersion = data[2]?.ToString() ?? "Unknown";
+
+                        Instance.Logger.LogInfo($"[CozyChat] Received mod ping from '{senderNick}' (v{senderVersion})");
+
+                        // Show message if we haven't seen this player yet
+                        if (!playersWithMod.Contains(senderUserId))
+                        {
+                            playersWithMod.Add(senderUserId);
+                            DisplayChatMessage("[CozyChat]", $"{senderNick} has CozyChat installed! (v{senderVersion})");
+                        }
+
+                        // Send pong back to let them know we also have it
+                        Instance.SendModPong();
+                        break;
+                    }
+
+                case CHAT_MOD_PONG_EVENT:
+                    {
+                        // Someone responded that they have the mod
+                        var data = (object[])ev.CustomData;
+                        string responderNick = data[0]?.ToString() ?? "???";
+                        string responderUserId = data[1]?.ToString() ?? "";
+                        string responderVersion = data[2]?.ToString() ?? "Unknown";
+
+                        Instance.Logger.LogInfo($"[CozyChat] Received mod pong from '{responderNick}' (v{responderVersion})");
+
+                        // Show message if we haven't seen this player yet
+                        if (!playersWithMod.Contains(responderUserId))
+                        {
+                            playersWithMod.Add(responderUserId);
+                            DisplayChatMessage("[CozyChat]", $"{responderNick} has CozyChat installed! (v{responderVersion})");
+                        }
+                        break;
+                    }
             }
         }
+
 
 
         private static Character FindCharacterByUserId(string userId)
@@ -753,6 +873,15 @@ namespace TextChatMod
                 currentLog.RemoveAt(0);
                 var rebuildMethod = typeof(PlayerConnectionLog).GetMethod("RebuildString", BindingFlags.NonPublic | BindingFlags.Instance);
                 rebuildMethod.Invoke(instance, null);
+            }
+        }
+
+        [HarmonyPatch(typeof(PhotonNetwork), "Disconnect")]
+        public static class PhotonNetwork_Disconnect_Patch
+        {
+            static void Postfix()
+            {
+                playersWithMod.Clear();
             }
         }
 
